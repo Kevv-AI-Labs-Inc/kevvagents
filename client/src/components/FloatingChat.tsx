@@ -7,13 +7,12 @@ import { trpc } from "@/lib/trpc";
 import {
   Loader2,
   MessageCircle,
-  Minimize2,
   Send,
   Sparkles,
   User,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Streamdown } from "streamdown";
 
 type Message = {
@@ -26,6 +25,21 @@ type LeadFormData = {
   email: string;
   phone: string;
 };
+
+// ─── Engagement: Teaser messages rotate every few seconds ────────
+const TEASER_MESSAGES_EN = [
+  "👋 Hi! Looking for homes in San Francisco?",
+  "💬 Ask me anything about the Bay Area market",
+  "🏠 I can help you find your dream home",
+  "📊 Get instant market insights — try me!",
+];
+
+const TEASER_MESSAGES_ZH = [
+  "👋 你好！在找旧金山的房子吗？",
+  "💬 有任何房产问题都可以问我",
+  "🏠 我可以帮你找到理想的家",
+  "📊 获取实时市场分析 — 试试看！",
+];
 
 const SUGGESTED_PROMPTS_EN = [
   "What's the market like in San Francisco?",
@@ -70,6 +84,13 @@ export default function FloatingChat({
   const [leadSubmitting, setLeadSubmitting] = useState(false);
   const [detectedLang, setDetectedLang] = useState<"en" | "zh">("en");
 
+  // ─── Engagement State ───────────────────────────────────────────
+  const [showTeaser, setShowTeaser] = useState(false);
+  const [teaserDismissed, setTeaserDismissed] = useState(false);
+  const [teaserIndex, setTeaserIndex] = useState(0);
+  const [hasScrolledPast, setHasScrolledPast] = useState(false);
+  const [wasEverOpened, setWasEverOpened] = useState(false);
+
   // Simple CJK detection for UI language adaptation
   const detectLang = (text: string): "en" | "zh" => {
     const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g;
@@ -82,12 +103,47 @@ export default function FloatingChat({
   const chatMutation = trpc.chat.sendMessage.useMutation();
   const leadMutation = trpc.lead.capture.useMutation();
 
-  // Pulse animation state
-  const [showPulse, setShowPulse] = useState(true);
+  // ─── Teaser Bubble: appears after 6 seconds, rotates messages ──
   useEffect(() => {
-    const timer = setTimeout(() => setShowPulse(false), 10000);
-    return () => clearTimeout(timer);
-  }, []);
+    if (isOpen || teaserDismissed || wasEverOpened) return;
+
+    const showTimer = setTimeout(() => {
+      setShowTeaser(true);
+    }, 6000);
+
+    return () => clearTimeout(showTimer);
+  }, [isOpen, teaserDismissed, wasEverOpened]);
+
+  // Rotate teaser messages every 4 seconds
+  useEffect(() => {
+    if (!showTeaser) return;
+    const interval = setInterval(() => {
+      setTeaserIndex((prev) => {
+        const msgs = detectedLang === "zh" ? TEASER_MESSAGES_ZH : TEASER_MESSAGES_EN;
+        return (prev + 1) % msgs.length;
+      });
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [showTeaser, detectedLang]);
+
+  // ─── Scroll Trigger: show teaser when user scrolls past hero ──
+  useEffect(() => {
+    if (wasEverOpened || isOpen) return;
+
+    const handleScroll = () => {
+      // Trigger when user scrolls 40% down the page
+      const scrollPercent = window.scrollY / (document.body.scrollHeight - window.innerHeight);
+      if (scrollPercent > 0.4 && !hasScrolledPast) {
+        setHasScrolledPast(true);
+        if (!teaserDismissed) {
+          setShowTeaser(true);
+        }
+      }
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, [wasEverOpened, isOpen, hasScrolledPast, teaserDismissed]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -109,6 +165,13 @@ export default function FloatingChat({
       setShowLeadForm(true);
     }
   }, [messageCount, leadCaptured, showLeadForm]);
+
+  const openChat = useCallback(() => {
+    setIsOpen(true);
+    setWasEverOpened(true);
+    setShowTeaser(false);
+    setTeaserDismissed(true);
+  }, []);
 
   const handleSend = async (content: string) => {
     if (!content.trim() || isLoading) return;
@@ -185,50 +248,83 @@ export default function FloatingChat({
     }
   };
 
+  const teaserMessages = detectedLang === "zh" ? TEASER_MESSAGES_ZH : TEASER_MESSAGES_EN;
+  const currentTeaser = teaserMessages[teaserIndex % teaserMessages.length];
+
   return (
     <>
-      {/* Floating Chat Button */}
+      {/* ─── Floating Button + Teaser Bubble ─── */}
       {!isOpen && (
-        <button
-          onClick={() => setIsOpen(true)}
-          className="fixed bottom-6 right-6 z-50 group"
-          aria-label="Chat with AI Assistant"
-        >
-          {/* Pulse rings */}
-          {showPulse && (
-            <>
-              <span className="absolute inset-0 rounded-full bg-primary/30 animate-ping" />
-              <span
-                className="absolute inset-0 rounded-full bg-primary/20 animate-ping"
-                style={{ animationDelay: "0.5s" }}
-              />
-            </>
+        <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3">
+          {/* Teaser Bubble - appears above the button */}
+          {showTeaser && !teaserDismissed && (
+            <div
+              className="animate-in slide-in-from-bottom-2 fade-in duration-500 relative max-w-[280px] cursor-pointer"
+              onClick={openChat}
+            >
+              <div className="bg-white dark:bg-zinc-800 rounded-2xl rounded-br-sm shadow-xl border border-border px-4 py-3 text-sm text-foreground">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setTeaserDismissed(true);
+                    setShowTeaser(false);
+                  }}
+                  className="absolute -top-2 -right-2 h-5 w-5 rounded-full bg-muted hover:bg-destructive hover:text-white flex items-center justify-center text-[10px] transition-colors shadow-sm"
+                  aria-label="Dismiss"
+                >
+                  ✕
+                </button>
+                <p className="leading-relaxed transition-opacity duration-300">
+                  {currentTeaser}
+                </p>
+                <p className="text-[10px] text-primary font-medium mt-1.5 uppercase tracking-wider">
+                  {detectedLang === "zh" ? "点击开始对话 →" : "Click to chat →"}
+                </p>
+              </div>
+              {/* Triangle pointer */}
+              <div className="absolute -bottom-1.5 right-6 w-3 h-3 bg-white dark:bg-zinc-800 border-r border-b border-border rotate-45" />
+            </div>
           )}
 
-          <div className="relative flex items-center gap-3 bg-primary text-primary-foreground pl-5 pr-6 py-3.5 rounded-full shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
-            <MessageCircle className="h-5 w-5" />
-            <span className="text-sm font-bold tracking-wide">
-              Chat with {agentName}
-            </span>
-          </div>
-        </button>
+          {/* Chat Button */}
+          <button
+            onClick={openChat}
+            className="group relative"
+            aria-label="Chat with AI Assistant"
+          >
+            {/* Persistent gentle pulse */}
+            <span className="absolute inset-0 rounded-full bg-primary/20 animate-ping" style={{ animationDuration: "3s" }} />
+
+            <div className="relative flex items-center gap-3 bg-primary text-primary-foreground pl-5 pr-6 py-3.5 rounded-full shadow-lg hover:shadow-xl transition-all duration-300 hover:scale-105">
+              <MessageCircle className="h-5 w-5" />
+              <span className="text-sm font-bold tracking-wide">
+                Chat with {agentName}
+              </span>
+              {/* Online indicator dot */}
+              <span className="absolute top-1 right-1 h-3 w-3 rounded-full bg-green-400 border-2 border-primary animate-pulse" />
+            </div>
+          </button>
+        </div>
       )}
 
-      {/* Chat Window */}
+      {/* ─── Chat Window ─── */}
       {isOpen && (
         <div className="fixed bottom-6 right-6 z-50 w-[380px] sm:w-[420px] h-[600px] max-h-[80vh] flex flex-col bg-background border border-border rounded-2xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom-4 fade-in duration-300">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 bg-primary text-primary-foreground border-b">
             <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-full bg-primary-foreground/20 flex items-center justify-center">
+              <div className="h-9 w-9 rounded-full bg-primary-foreground/20 flex items-center justify-center relative">
                 <Sparkles className="h-4 w-4" />
+                {/* Online dot */}
+                <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-green-400 border-2 border-primary" />
               </div>
               <div>
                 <p className="text-sm font-bold tracking-wide">
                   {agentName}'s AI Assistant
                 </p>
-                <p className="text-[11px] opacity-80">
-                  Powered by Kevv AI
+                <p className="text-[11px] opacity-80 flex items-center gap-1">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-400" />
+                  {detectedLang === "zh" ? "在线 · 由 Kevv AI 驱动" : "Online · Powered by Kevv AI"}
                 </p>
               </div>
             </div>
@@ -251,11 +347,14 @@ export default function FloatingChat({
                     </div>
                     <div className="text-center">
                       <p className="text-sm font-semibold text-foreground">
-                        Hi! I'm {agentName}'s AI assistant
+                        {detectedLang === "zh"
+                          ? `你好！我是 ${agentName} 的 AI 助手`
+                          : `Hi! I'm ${agentName}'s AI assistant`}
                       </p>
                       <p className="text-xs mt-1">
-                        Ask me about properties, neighborhoods, or the home
-                        buying process
+                        {detectedLang === "zh"
+                          ? "可以问我任何关于房产、社区和买房流程的问题"
+                          : "Ask me about properties, neighborhoods, or the home buying process"}
                       </p>
                     </div>
                   </div>
@@ -354,7 +453,7 @@ export default function FloatingChat({
                   {/* Lead Capture Form - appears inline after 3 messages */}
                   {showLeadForm && !leadCaptured && (
                     <div className="my-2 p-4 rounded-xl bg-primary/5 border border-primary/20 animate-in fade-in slide-in-from-bottom-2 duration-300">
-                      <div className="flex items-center gap-2 mb-3">
+                      <div className="flex items-center gap-2 mb-2">
                         <Sparkles className="h-4 w-4 text-primary" />
                         <p className="text-sm font-semibold">
                           {detectedLang === "zh"
@@ -362,6 +461,11 @@ export default function FloatingChat({
                             : `Want ${agentName} to follow up personally?`}
                         </p>
                       </div>
+                      <p className="text-xs text-muted-foreground mb-3">
+                        {detectedLang === "zh"
+                          ? "留下联系方式，我会把对话摘要发给她，她会第一时间回复你"
+                          : "Leave your info and I'll send her a summary of our chat — she'll reach out ASAP"}
+                      </p>
                       <form
                         onSubmit={handleLeadSubmit}
                         className="flex flex-col gap-2"

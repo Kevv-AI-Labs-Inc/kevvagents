@@ -166,17 +166,40 @@ const normalizeResponseFormat = ({
 
 /**
  * Invoke an OpenAI-compatible LLM API.
- * Works with: OpenAI, Azure OpenAI, Gemini (via OpenAI-compat), Ollama, vLLM, etc.
+ * Supports: Azure OpenAI (auto-detected), standard OpenAI, Gemini, Ollama, vLLM, etc.
  */
 export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
-  if (!ENV.openaiApiKey) {
-    throw new Error("OPENAI_API_KEY is not configured. Set it in your environment.");
+  const isAzure = ENV.useAzure;
+
+  if (!isAzure && !ENV.openaiApiKey) {
+    throw new Error("No LLM API key configured. Set AZURE_OPENAI_API_KEY or OPENAI_API_KEY in your environment.");
   }
 
-  const apiUrl = `${ENV.openaiApiUrl.replace(/\/$/, "")}/v1/chat/completions`;
+  // Build URL based on provider
+  let apiUrl: string;
+  let headers: Record<string, string>;
+
+  if (isAzure) {
+    // Azure OpenAI: https://{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={version}
+    const endpoint = ENV.azureOpenaiEndpoint.replace(/\/$/, "");
+    const deployment = ENV.azureOpenaiDeployment;
+    apiUrl = `${endpoint}/openai/deployments/${deployment}/chat/completions?api-version=${ENV.azureOpenaiApiVersion}`;
+    headers = {
+      "content-type": "application/json",
+      "api-key": ENV.azureOpenaiApiKey,
+    };
+  } else {
+    // Standard OpenAI-compatible
+    apiUrl = `${ENV.openaiApiUrl.replace(/\/$/, "")}/v1/chat/completions`;
+    headers = {
+      "content-type": "application/json",
+      authorization: `Bearer ${ENV.openaiApiKey}`,
+    };
+  }
 
   const payload: Record<string, unknown> = {
-    model: ENV.openaiModel,
+    // Azure ignores "model" (uses deployment), but including it doesn't hurt
+    model: isAzure ? ENV.azureOpenaiDeployment : ENV.openaiModel,
     messages: params.messages,
   };
 
@@ -208,19 +231,17 @@ export async function invokeLLM(params: InvokeParams): Promise<InvokeResult> {
 
   const response = await fetch(apiUrl, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${ENV.openaiApiKey}`,
-    },
+    headers,
     body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
     const errorText = await response.text();
     throw new Error(
-      `LLM invoke failed: ${response.status} ${response.statusText} – ${errorText}`
+      `LLM invoke failed (${isAzure ? "Azure" : "OpenAI"}): ${response.status} ${response.statusText} – ${errorText}`
     );
   }
 
   return (await response.json()) as InvokeResult;
 }
+
