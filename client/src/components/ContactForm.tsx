@@ -6,11 +6,11 @@ import { trpc } from "@/lib/trpc";
 import { AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 
 interface ContactFormProps {
-  targetMember: string;
-  targetMemberName: string;
+  agentSlug: string;
+  agentName: string;
 }
 
-export default function ContactForm({ targetMember, targetMemberName }: ContactFormProps) {
+export default function ContactForm({ agentSlug, agentName }: ContactFormProps) {
   const [formData, setFormData] = useState({
     senderName: "",
     senderEmail: "",
@@ -40,7 +40,7 @@ export default function ContactForm({ targetMember, targetMemberName }: ContactF
     try {
       await submitMutation.mutateAsync({
         ...formData,
-        targetMember,
+        agentSlug,
       });
 
       setStatus("success");
@@ -73,7 +73,7 @@ export default function ContactForm({ targetMember, targetMemberName }: ContactF
             <CheckCircle2 className="h-5 w-5 text-green-600 flex-shrink-0" />
             <div>
               <p className="font-semibold text-green-900">Message sent successfully!</p>
-              <p className="text-sm text-green-800">{targetMemberName} will get back to you soon.</p>
+              <p className="text-sm text-green-800">{agentName} will get back to you soon.</p>
             </div>
           </div>
         )}

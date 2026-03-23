@@ -1,25 +1,18 @@
-import { COOKIE_NAME } from "@shared/const";
-import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
 import { contactMessages } from "../drizzle/schema";
-import { getDb } from "./db";
+import { getDb, getAgentBySlug } from "./db";
 import { sendEmail, generateContactNotificationEmail, generateConfirmationEmail } from "./_core/emailService";
+import { chatRouter, leadRouter } from "./chatRouter";
+import { agentRouter, dashboardRouter } from "./agentRouter";
 
 export const appRouter = router({
-    // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
   system: systemRouter,
-  auth: router({
-    me: publicProcedure.query(opts => opts.ctx.user),
-    logout: publicProcedure.mutation(({ ctx }) => {
-      const cookieOptions = getSessionCookieOptions(ctx.req);
-      ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
-      return {
-        success: true,
-      } as const;
-    }),
-  }),
+  chat: chatRouter,
+  lead: leadRouter,
+  agent: agentRouter,
+  dashboard: dashboardRouter,
 
   contact: router({
     submit: publicProcedure
@@ -28,14 +21,19 @@ export const appRouter = router({
           senderName: z.string().min(1, "Name is required"),
           senderEmail: z.string().email("Invalid email"),
           senderPhone: z.string().optional(),
-          targetMember: z.string().min(1, "Target member is required"),
+          agentSlug: z.string().min(1, "Agent is required"),
           subject: z.string().min(1, "Subject is required"),
           message: z.string().min(1, "Message is required"),
         })
       )
       .mutation(async ({ input }) => {
         try {
-          // Try to save message to database (non-blocking if DB unavailable)
+          // Look up agent profile for notification
+          const agent = await getAgentBySlug(input.agentSlug);
+          const targetEmail = agent?.email ?? "";
+          const targetName = agent?.name ?? input.agentSlug;
+
+          // Save message to database
           const db = await getDb();
           if (db) {
             try {
@@ -43,52 +41,42 @@ export const appRouter = router({
                 senderName: input.senderName,
                 senderEmail: input.senderEmail,
                 senderPhone: input.senderPhone || null,
-                targetMember: input.targetMember,
+                agentSlug: input.agentSlug,
                 subject: input.subject,
                 message: input.message,
-                isRead: 0,
+                isRead: false,
               });
               console.log("[Contact] Message saved to database");
             } catch (dbError) {
               console.warn("[Contact] Failed to save to database (non-critical):", dbError);
             }
-          } else {
-            console.warn("[Contact] Database not available, skipping DB save");
           }
 
-          // Contact form always routes to Heidi (single-agent profile)
-          const targetMemberEmail = "heidi@homixny.com";
-          const targetMemberName = "Heidi";
+          // Send notification to agent
+          if (targetEmail) {
+            const notificationHtml = generateContactNotificationEmail(
+              input.senderName,
+              input.senderEmail,
+              input.senderPhone || null,
+              input.subject,
+              input.message,
+              targetName
+            );
 
-          // Send notification email to team member
-          const notificationHtml = generateContactNotificationEmail(
-            input.senderName,
-            input.senderEmail,
-            input.senderPhone || null,
-            input.subject,
-            input.message,
-            targetMemberName
-          );
+            await sendEmail({
+              to: targetEmail,
+              subject: `New Contact Form Submission: ${input.subject}`,
+              html: notificationHtml,
+            });
+          }
 
-          const notificationSent = await sendEmail({
-            to: targetMemberEmail,
-            subject: `New Contact Form Submission: ${input.subject}`,
-            html: notificationHtml,
-          });
-
-          // Send confirmation email to sender
-          const confirmationHtml = generateConfirmationEmail(input.senderName, targetMemberName);
-          const confirmationSent = await sendEmail({
+          // Send confirmation to sender
+          const confirmationHtml = generateConfirmationEmail(input.senderName, targetName);
+          await sendEmail({
             to: input.senderEmail,
-            subject: "We've Received Your Message - Homix Realty",
+            subject: `We've Received Your Message - ${targetName}`,
             html: confirmationHtml,
           });
-
-          console.log(`[Contact] Notification email sent: ${notificationSent}, Confirmation email sent: ${confirmationSent}`);
-
-          if (!notificationSent && !confirmationSent) {
-            console.warn("[Contact] Email service not configured or unavailable");
-          }
 
           return {
             success: true,

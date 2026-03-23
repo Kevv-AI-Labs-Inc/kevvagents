@@ -10,7 +10,7 @@ describe("Email Service", () => {
         "555-1234",
         "Property Inquiry",
         "I'm interested in the property at 123 Main St",
-        "Heidi"
+        "Jane"
       );
 
       expect(html).toContain("New Contact Form Submission");
@@ -20,7 +20,7 @@ describe("Email Service", () => {
       expect(html).toContain("Property Inquiry");
       // Single quote is escaped as &#039;
       expect(html).toContain("interested in the property at 123 Main St");
-      expect(html).toContain("Heidi");
+      expect(html).toContain("Jane");
     });
 
     it("should handle special characters in sender name", () => {
@@ -30,7 +30,7 @@ describe("Email Service", () => {
         null,
         "Test",
         "Test message",
-        "Heidi"
+        "Jane"
       );
 
       expect(html).toContain("&amp;");
@@ -45,7 +45,7 @@ describe("Email Service", () => {
         null,
         "Test",
         "Test message",
-        "Heidi"
+        "Jane"
       );
 
       expect(html).not.toContain("<strong>Phone:</strong>");
@@ -58,7 +58,7 @@ describe("Email Service", () => {
         null,
         "Test",
         "<script>alert('xss')</script>",
-        "Heidi"
+        "Jane"
       );
 
       expect(html).toContain("&lt;script&gt;");
@@ -69,25 +69,25 @@ describe("Email Service", () => {
 
   describe("generateConfirmationEmail", () => {
     it("should generate valid HTML for confirmation email", () => {
-      const html = generateConfirmationEmail("John Doe", "Heidi");
+      const html = generateConfirmationEmail("John Doe", "Jane");
 
       expect(html).toContain("Thank You for Contacting Us");
       expect(html).toContain("John Doe");
-      expect(html).toContain("Heidi");
+      expect(html).toContain("Jane");
       expect(html).toContain("received your message");
     });
 
     it("should handle special characters in sender name", () => {
-      const html = generateConfirmationEmail("John & Jane", "Heidi");
+      const html = generateConfirmationEmail("John & Jane", "Jane");
 
       expect(html).toContain("&amp;");
-      expect(html).toContain("Heidi");
+      expect(html).toContain("Jane");
     });
 
     it("should include team member name", () => {
-      const html = generateConfirmationEmail("Test User", "Heidi");
+      const html = generateConfirmationEmail("Test User", "Jane");
 
-      expect(html).toContain("Heidi");
+      expect(html).toContain("Jane");
     });
   });
 
@@ -99,7 +99,7 @@ describe("Email Service", () => {
         "555-1234",
         "Test Subject",
         "Test message content",
-        "Heidi"
+        "Jane"
       );
 
       // Check for proper HTML structure
@@ -110,7 +110,7 @@ describe("Email Service", () => {
     });
 
     it("should include proper email styling", () => {
-      const html = generateConfirmationEmail("Test User", "Heidi");
+      const html = generateConfirmationEmail("Test User", "Jane");
 
       expect(html).toContain("style=");
       expect(html).toContain("font-family");
@@ -124,26 +124,26 @@ describe("Email Service", () => {
         null,
         "Test",
         "Test",
-        "Heidi"
+        "Jane"
       );
 
       expect(html).toContain("mailto:test@example.com");
       expect(html).toContain("test@example.com");
     });
 
-    it("should include Homix branding in footer", () => {
+    it("should include Kevv branding in footer", () => {
       const html1 = generateContactNotificationEmail(
         "Test",
         "test@example.com",
         null,
         "Test",
         "Test",
-        "Heidi"
+        "Jane"
       );
-      const html2 = generateConfirmationEmail("Test", "Heidi");
+      const html2 = generateConfirmationEmail("Test", "Jane");
 
-      expect(html1).toContain("Homix Realty Inc");
-      expect(html2).toContain("Homix Realty Inc");
+      expect(html1).toContain("Kevv Realty");
+      expect(html2).toContain("Kevv Realty");
     });
   });
 });
