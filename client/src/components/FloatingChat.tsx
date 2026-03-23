@@ -28,15 +28,15 @@ type LeadFormData = {
 };
 
 const SUGGESTED_PROMPTS = [
-  "What's the market like in Queens?",
+  "What's the market like in San Francisco?",
   "How do I schedule a showing?",
-  "Tell me about Flushing neighborhoods",
+  "Tell me about Noe Valley",
   "What should first-time buyers know?",
 ];
 
 export default function FloatingChat({
-  agentSlug = "heidi",
-  agentName = "Heidi",
+  agentSlug = "jane",
+  agentName = "Jane",
 }: {
   agentSlug?: string;
   agentName?: string;

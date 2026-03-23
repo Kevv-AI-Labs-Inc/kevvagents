@@ -59,9 +59,9 @@ export const appRouter = router({
             console.warn("[Contact] Database not available, skipping DB save");
           }
 
-          // Contact form always routes to Heidi (single-agent profile)
-          const targetMemberEmail = "heidi@homixny.com";
-          const targetMemberName = "Heidi";
+          // Contact form routes to agent (single-agent profile)
+          const targetMemberEmail = "jane@kevvrealty.com";
+          const targetMemberName = "Jane";
 
           // Send notification email to team member
           const notificationHtml = generateContactNotificationEmail(
@@ -83,7 +83,7 @@ export const appRouter = router({
           const confirmationHtml = generateConfirmationEmail(input.senderName, targetMemberName);
           const confirmationSent = await sendEmail({
             to: input.senderEmail,
-            subject: "We've Received Your Message - Homix Realty",
+            subject: "We've Received Your Message - Kevv Realty",
             html: confirmationHtml,
           });
 

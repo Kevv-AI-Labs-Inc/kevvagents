@@ -89,7 +89,7 @@ export function generateContactNotificationEmail(
       </div>
 
       <div style="background-color: #f0f0f0; padding: 15px; border-radius: 8px; text-align: center; color: #666; font-size: 12px;">
-        <p style="margin: 0;">This message is for ${escapeHtml(targetMemberName)} from Homix Realty Inc.</p>
+        <p style="margin: 0;">This message is for ${escapeHtml(targetMemberName)} from Kevv Realty.</p>
       </div>
     </div>
   `;
@@ -120,7 +120,7 @@ export function generateConfirmationEmail(
       </div>
 
       <div style="background-color: #f0f0f0; padding: 15px; border-radius: 8px; text-align: center; color: #666; font-size: 12px;">
-        <p style="margin: 0;">© 2025 Homix Realty Inc. All rights reserved.</p>
+        <p style="margin: 0;">© 2026 Kevv Realty. All rights reserved.</p>
       </div>
     </div>
   `;
@@ -156,7 +156,7 @@ export function generateLeadNotificationEmail(
       </div>
 
       <div style="background-color: #f0f0f0; padding: 15px; border-radius: 8px; text-align: center; color: #666; font-size: 12px;">
-        <p style="margin: 0;">This lead was captured by Kevv AI for ${escapeHtml(targetMemberName)} | Homix Realty Inc.</p>
+        <p style="margin: 0;">This lead was captured by Kevv AI for ${escapeHtml(targetMemberName)} | Kevv Realty.</p>
       </div>
     </div>
   `;

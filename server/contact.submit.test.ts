@@ -15,7 +15,7 @@ describe("Contact Form Submission", () => {
     senderName: "Test User",
     senderEmail: "test@example.com",
     senderPhone: "555-1234",
-    targetMember: "heidi",
+    targetMember: "jane",
     subject: "Test Inquiry",
     message: "This is a test message",
   };
@@ -33,7 +33,7 @@ describe("Contact Form Submission", () => {
     const invalidData = {
       senderName: "",
       senderEmail: "test@example.com",
-      targetMember: "heidi",
+      targetMember: "jane",
       subject: "Test",
       message: "Test",
     };
@@ -50,7 +50,7 @@ describe("Contact Form Submission", () => {
     const invalidData = {
       senderName: "Test User",
       senderEmail: "invalid-email",
-      targetMember: "heidi",
+      targetMember: "jane",
       subject: "Test",
       message: "Test",
     };
@@ -95,7 +95,7 @@ describe("Contact Form Submission", () => {
     const dataWithoutPhone = {
       senderName: "Test User",
       senderEmail: "no-phone@example.com",
-      targetMember: "heidi",
+      targetMember: "jane",
       subject: "Test",
       message: "Test",
     };
