@@ -1,8 +1,11 @@
 /**
- * Property search service — queries external property APIs via callDataApi.
- * Falls back to static/cached data when external API is unavailable.
+ * Property search service — placeholder for future MLS/Zillow API integration.
+ * 
+ * Currently returns empty results. To enable real property search:
+ * 1. Sign up for RapidAPI Zillow API ($0.006/request)
+ * 2. Set ZILLOW_API_KEY in env
+ * 3. Uncomment the API call below
  */
-import { callDataApi } from "./_core/dataApi";
 
 export type PropertyListing = {
   address: string;
@@ -13,8 +16,8 @@ export type PropertyListing = {
   bedrooms: number;
   bathrooms: number;
   sqft: number;
-  type: string; // "single_family" | "condo" | "townhouse" | "multi_family"
-  status: string; // "for_sale" | "pending" | "sold"
+  type: string;
+  status: string;
   imageUrl?: string;
   listingUrl?: string;
 };
@@ -24,7 +27,7 @@ export type MarketStats = {
   medianPrice: number;
   avgDaysOnMarket: number;
   activeListings: number;
-  priceChangeYoY: number; // percentage
+  priceChangeYoY: number;
 };
 
 export type PropertySearchParams = {
@@ -39,87 +42,41 @@ export type PropertySearchParams = {
 };
 
 /**
- * Search properties via external API (Zillow/RapidAPI/Realtor.com).
- * Uses callDataApi infrastructure which routes through the forge gateway.
+ * Search properties — currently returns empty (falls back to AI knowledge).
+ * 
+ * TODO: Integrate with RapidAPI Zillow or Realty-in-US API:
+ * ```
+ * const response = await fetch("https://zillow-com1.p.rapidapi.com/propertyExtendedSearch", {
+ *   headers: {
+ *     "X-RapidAPI-Key": process.env.ZILLOW_API_KEY,
+ *     "X-RapidAPI-Host": "zillow-com1.p.rapidapi.com",
+ *   },
+ * });
+ * ```
  */
 export async function searchProperties(
   params: PropertySearchParams
 ): Promise<PropertyListing[]> {
-  try {
-    const query: Record<string, unknown> = {};
-    if (params.city) query.city = params.city;
-    if (params.state) query.state = params.state;
-    if (params.zipCode) query.zip = params.zipCode;
-    if (params.minPrice) query.minPrice = params.minPrice;
-    if (params.maxPrice) query.maxPrice = params.maxPrice;
-    if (params.bedrooms) query.bedrooms = params.bedrooms;
-    if (params.propertyType) query.home_type = params.propertyType;
-    query.limit = params.limit || 5;
-
-    const result = await callDataApi("Zillow/propertyExtendedSearch", { query });
-
-    // Parse API response into our PropertyListing format
-    if (result && typeof result === "object" && "props" in result) {
-      const props = (result as any).props as any[];
-      return (props || []).slice(0, params.limit || 5).map((p: any) => ({
-        address: p.address || p.streetAddress || "N/A",
-        city: p.city || params.city || "N/A",
-        state: p.state || params.state || "N/A",
-        zipCode: p.zipcode || params.zipCode || "N/A",
-        price: p.price || 0,
-        bedrooms: p.bedrooms || 0,
-        bathrooms: p.bathrooms || 0,
-        sqft: p.livingArea || 0,
-        type: p.homeType || "unknown",
-        status: p.homeStatus || "for_sale",
-        imageUrl: p.imgSrc || undefined,
-        listingUrl: p.detailUrl || undefined,
-      }));
-    }
-
-    return [];
-  } catch (error) {
-    console.warn("[PropertyService] API search failed, using fallback:", error);
-    return getFallbackListings(params);
-  }
+  console.log(`[PropertyService] Search requested for ${params.city || "unknown"} — API not configured, using AI knowledge`);
+  return [];
 }
 
 /**
- * Get market statistics for an area.
+ * Get market statistics for an area — placeholder.
  */
 export async function getMarketStats(
   city: string,
-  state: string = "CA"
+  _state: string = "CA"
 ): Promise<MarketStats | null> {
-  try {
-    const result = await callDataApi("Zillow/propertyExtendedSearch", {
-      query: { location: `${city}, ${state}`, limit: 1 },
-    });
-
-    // If we get a response with totalResultCount, we can derive basic stats
-    if (result && typeof result === "object") {
-      const data = result as any;
-      return {
-        area: `${city}, ${state}`,
-        medianPrice: data.medianListingPrice || 0,
-        avgDaysOnMarket: data.avgDaysOnMarket || 0,
-        activeListings: data.totalResultCount || 0,
-        priceChangeYoY: data.priceChange || 0,
-      };
-    }
-
-    return null;
-  } catch (error) {
-    console.warn("[PropertyService] Market stats failed:", error);
-    return null;
-  }
+  console.log(`[PropertyService] Market stats requested for ${city} — API not configured`);
+  return null;
 }
 
 /**
  * Format property listings into a readable string for AI context.
  */
 export function formatListingsForAI(listings: PropertyListing[]): string {
-  if (listings.length === 0) return "No properties found matching those criteria.";
+  if (listings.length === 0) return "No live property data available. Use your neighborhood knowledge to answer.";
 
   return listings
     .map(
@@ -129,16 +86,4 @@ export function formatListingsForAI(listings: PropertyListing[]): string {
         `   Type: ${p.type} | Status: ${p.status}`
     )
     .join("\n\n");
-}
-
-/**
- * Fallback listings when API is unavailable — returns example data.
- * In production, this could query a local cache or database.
- */
-function getFallbackListings(params: PropertySearchParams): PropertyListing[] {
-  const city = params.city || "San Francisco";
-  console.warn(`[PropertyService] Returning fallback listings for ${city}`);
-
-  // Return empty — let the AI explain that live data is temporarily unavailable
-  return [];
 }
