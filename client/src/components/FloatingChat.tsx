@@ -27,11 +27,18 @@ type LeadFormData = {
   phone: string;
 };
 
-const SUGGESTED_PROMPTS = [
+const SUGGESTED_PROMPTS_EN = [
   "What's the market like in San Francisco?",
   "How do I schedule a showing?",
   "Tell me about Noe Valley",
   "What should first-time buyers know?",
+];
+
+const SUGGESTED_PROMPTS_ZH = [
+  "旧金山的房价行情怎么样？",
+  "我想预约看房",
+  "介绍一下 Noe Valley 社区",
+  "首次买房需要注意什么？",
 ];
 
 export default function FloatingChat({
@@ -61,6 +68,14 @@ export default function FloatingChat({
     phone: "",
   });
   const [leadSubmitting, setLeadSubmitting] = useState(false);
+  const [detectedLang, setDetectedLang] = useState<"en" | "zh">("en");
+
+  // Simple CJK detection for UI language adaptation
+  const detectLang = (text: string): "en" | "zh" => {
+    const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g;
+    const matches = text.match(cjkRegex);
+    return matches && matches.length / text.length > 0.15 ? "zh" : "en";
+  };
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -102,6 +117,10 @@ export default function FloatingChat({
     setMessages((prev) => [...prev, userMessage]);
     setInput("");
     setIsLoading(true);
+
+    // Detect language from user input
+    const lang = detectLang(content);
+    if (lang !== detectedLang) setDetectedLang(lang);
 
     try {
       const result = await chatMutation.mutateAsync({
@@ -242,7 +261,7 @@ export default function FloatingChat({
                   </div>
 
                   <div className="flex flex-col gap-2 w-full max-w-xs">
-                    {SUGGESTED_PROMPTS.map((prompt, i) => (
+                    {(detectedLang === "zh" ? SUGGESTED_PROMPTS_ZH : SUGGESTED_PROMPTS_EN).map((prompt, i) => (
                       <button
                         key={i}
                         onClick={() => handleSend(prompt)}
@@ -252,6 +271,13 @@ export default function FloatingChat({
                         {prompt}
                       </button>
                     ))}
+                    {/* Language toggle hint */}
+                    <button
+                      onClick={() => setDetectedLang(detectedLang === "en" ? "zh" : "en")}
+                      className="text-[11px] text-muted-foreground hover:text-primary transition-colors text-center mt-1"
+                    >
+                      {detectedLang === "en" ? "🇨🇳 切换中文" : "🇺🇸 Switch to English"}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -331,7 +357,9 @@ export default function FloatingChat({
                       <div className="flex items-center gap-2 mb-3">
                         <Sparkles className="h-4 w-4 text-primary" />
                         <p className="text-sm font-semibold">
-                          Want {agentName} to follow up personally?
+                          {detectedLang === "zh"
+                            ? `希望 ${agentName} 亲自跟进？`
+                            : `Want ${agentName} to follow up personally?`}
                         </p>
                       </div>
                       <form
@@ -339,7 +367,7 @@ export default function FloatingChat({
                         className="flex flex-col gap-2"
                       >
                         <Input
-                          placeholder="Your name *"
+                          placeholder={detectedLang === "zh" ? "您的姓名 *" : "Your name *"}
                           value={leadForm.name}
                           onChange={(e) =>
                             setLeadForm((f) => ({ ...f, name: e.target.value }))
@@ -349,7 +377,7 @@ export default function FloatingChat({
                         />
                         <Input
                           type="email"
-                          placeholder="Email address *"
+                          placeholder={detectedLang === "zh" ? "电子邮箱 *" : "Email address *"}
                           value={leadForm.email}
                           onChange={(e) =>
                             setLeadForm((f) => ({
@@ -362,7 +390,7 @@ export default function FloatingChat({
                         />
                         <Input
                           type="tel"
-                          placeholder="Phone (optional)"
+                          placeholder={detectedLang === "zh" ? "电话（选填）" : "Phone (optional)"}
                           value={leadForm.phone}
                           onChange={(e) =>
                             setLeadForm((f) => ({
@@ -382,7 +410,7 @@ export default function FloatingChat({
                             {leadSubmitting ? (
                               <Loader2 className="h-3.5 w-3.5 animate-spin" />
                             ) : (
-                              "Connect Me"
+                              detectedLang === "zh" ? "联系我" : "Connect Me"
                             )}
                           </Button>
                           <Button
@@ -392,7 +420,7 @@ export default function FloatingChat({
                             className="h-9 text-xs"
                             onClick={() => setShowLeadForm(false)}
                           >
-                            Later
+                            {detectedLang === "zh" ? "稍后" : "Later"}
                           </Button>
                         </div>
                       </form>
@@ -403,7 +431,9 @@ export default function FloatingChat({
                   {leadCaptured && (
                     <div className="my-2 p-3 rounded-xl bg-green-500/10 border border-green-500/30 text-center animate-in fade-in duration-300">
                       <p className="text-sm font-semibold text-green-700 dark:text-green-400">
-                        ✅ {agentName} will reach out to you soon!
+                        {detectedLang === "zh"
+                          ? `✅ ${agentName} 会尽快联系您！`
+                          : `✅ ${agentName} will reach out to you soon!`}
                       </p>
                     </div>
                   )}
@@ -425,7 +455,7 @@ export default function FloatingChat({
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask anything about real estate..."
+              placeholder={detectedLang === "zh" ? "输入房产相关问题..." : "Ask anything about real estate..."}
               className="flex-1 max-h-24 resize-none min-h-9 text-sm rounded-xl"
               rows={1}
             />

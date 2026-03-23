@@ -1,15 +1,19 @@
 import { publicProcedure, router } from "./_core/trpc";
 import { z } from "zod";
-import { chatSessions, chatMessages, leads } from "../drizzle/schema";
+import { chatSessions, chatMessages, leads, agentUsage } from "../drizzle/schema";
 import { getDb } from "./db";
-import { invokeLLM } from "./_core/llm";
+import { invokeLLM, type Tool, type Message } from "./_core/llm";
 import { nanoid } from "nanoid";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, and, sql } from "drizzle-orm";
 import { sendEmail, generateLeadNotificationEmail } from "./_core/emailService";
+import { notifyOwner } from "./_core/notification";
+import { searchProperties, formatListingsForAI, type PropertySearchParams } from "./propertyService";
 
-/**
- * Agent profile type — in production this would come from DB.
- */
+// ─── Constants ──────────────────────────────────────────────────
+const FREE_TIER_MONTHLY_LIMIT = 20;
+const MAX_HISTORY_MESSAGES = 20;
+
+// ─── Agent Profile Type ─────────────────────────────────────────
 type AgentProfile = {
   name: string;
   title: string;
@@ -25,10 +29,7 @@ type AgentProfile = {
   neighborhoodKnowledge: Record<string, string>;
 };
 
-/**
- * Agent profiles registry — in production, fetched from a DB / CRM.
- * Each agent's profile acts as the RAG knowledge base for their AI assistant.
- */
+// ─── Agent Profiles (in production → DB) ────────────────────────
 const AGENT_PROFILES: Record<string, AgentProfile> = {
   jane: {
     name: "Jane Smith",
@@ -60,73 +61,237 @@ const AGENT_PROFILES: Record<string, AgentProfile> = {
   },
 };
 
+// ─── Language Detection ─────────────────────────────────────────
+
 /**
- * Build a rich system prompt with RAG-style context retrieval.
- * Injects agent profile, neighborhood data, transaction history, and market knowledge.
+ * Detect if text contains CJK characters (Chinese, Japanese, Korean).
+ * Returns "zh" for Chinese-dominant text, "en" otherwise.
  */
-function buildAgentSystemPrompt(agentSlug: string, userMessage?: string): string {
+function detectLanguage(text: string): "zh" | "en" {
+  const cjkRegex = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g;
+  const cjkMatches = text.match(cjkRegex);
+  const cjkRatio = cjkMatches ? cjkMatches.length / text.length : 0;
+  return cjkRatio > 0.15 ? "zh" : "en";
+}
+
+// ─── LLM Tools ──────────────────────────────────────────────────
+
+const PROPERTY_SEARCH_TOOL: Tool = {
+  type: "function",
+  function: {
+    name: "search_properties",
+    description: "Search for real estate properties for sale. Use when the visitor asks about available properties, listings, or homes in a specific area.",
+    parameters: {
+      type: "object",
+      properties: {
+        city: { type: "string", description: "City name, e.g. 'San Francisco'" },
+        state: { type: "string", description: "State abbreviation, e.g. 'CA'" },
+        minPrice: { type: "number", description: "Minimum price filter" },
+        maxPrice: { type: "number", description: "Maximum price filter" },
+        bedrooms: { type: "number", description: "Number of bedrooms" },
+        propertyType: { type: "string", description: "Property type: single_family, condo, townhouse, multi_family" },
+      },
+      required: [],
+    },
+  },
+};
+
+const EXTRACT_LEAD_TOOL: Tool = {
+  type: "function",
+  function: {
+    name: "extract_lead_info",
+    description: "Extract lead qualification data from the conversation when the visitor reveals their preferences. Call this whenever you learn new information about what the visitor is looking for.",
+    parameters: {
+      type: "object",
+      properties: {
+        intent: {
+          type: "string",
+          enum: ["buying", "selling", "renting", "investing", "browsing"],
+          description: "What the visitor intends to do",
+        },
+        budget: {
+          type: "string",
+          description: "Budget range mentioned, e.g. '$800K-$1.2M' or 'under $500K'",
+        },
+        area: {
+          type: "string",
+          description: "Areas or neighborhoods of interest",
+        },
+        timeline: {
+          type: "string",
+          description: "When they plan to buy/sell, e.g. 'next 3 months', 'just looking'",
+        },
+        urgency: {
+          type: "string",
+          enum: ["high", "medium", "low"],
+          description: "How urgent their need seems",
+        },
+      },
+      required: ["intent"],
+    },
+  },
+};
+
+// ─── System Prompt Builder ──────────────────────────────────────
+
+function buildAgentSystemPrompt(
+  agentSlug: string,
+  userMessage?: string,
+  language: "en" | "zh" = "en"
+): string {
   const agent = AGENT_PROFILES[agentSlug] || AGENT_PROFILES.jane;
 
-  // RAG-style: retrieve relevant neighborhood context based on user's message
-  let relevantNeighborhoodContext = "";
+  // RAG: inject matching neighborhood data
+  let neighborhoodCtx = "";
   if (userMessage) {
     const msgLower = userMessage.toLowerCase();
-    const matchedNeighborhoods = Object.entries(agent.neighborhoodKnowledge)
+    const matches = Object.entries(agent.neighborhoodKnowledge)
       .filter(([name]) => msgLower.includes(name.toLowerCase()))
-      .map(([name, info]) => `\n### ${name}\n${info}`);
-    
-    if (matchedNeighborhoods.length > 0) {
-      relevantNeighborhoodContext = `\n\n## Relevant Neighborhood Data (use this to answer accurately):\n${matchedNeighborhoods.join("\n")}`;
+      .map(([name, info]) => `### ${name}\n${info}`);
+    if (matches.length > 0) {
+      neighborhoodCtx = `\n\n## Relevant Neighborhood Data\n${matches.join("\n\n")}`;
     }
   }
 
-  // Build transactions context
-  const transactionsContext = agent.recentTransactions
+  const txCtx = agent.recentTransactions
     .map((t) => `  - ${t.address}, ${t.city} — ${t.price} (${t.type})`)
     .join("\n");
 
-  return `You are an AI real estate assistant for ${agent.name}, a ${agent.title} at ${agent.brokerage}.
+  const langInstructions = language === "zh"
+    ? `\n\n## 语言
+- 用户使用中文，请用中文回复
+- 专业术语可以中英文对照（如：首付 Down Payment）
+- 保持友好专业的语气`
+    : `\n\n## Language
+- Respond in the same language the visitor uses
+- If they write in Chinese, respond in Chinese`;
+
+  return `You are an AI real estate assistant (AI ISA) for ${agent.name}, a ${agent.title} at ${agent.brokerage}.
 
 ## Your Role
-Help website visitors with real estate questions. Your goal is to be genuinely helpful so visitors trust ${agent.name} and want to work with them. You should demonstrate deep local expertise.
+Help website visitors with real estate questions. Demonstrate deep local expertise. Your goal is to qualify leads by understanding what visitors need, then connect them with ${agent.name}.
 
 ## Agent Profile
-- **Name**: ${agent.name}
-- **Title**: ${agent.title}
-- **Brokerage**: ${agent.brokerage}
-- **Experience**: ${agent.yearsExperience}+ years full-time
+- **Name**: ${agent.name} | **Title**: ${agent.title} | **Brokerage**: ${agent.brokerage}
+- **Experience**: ${agent.yearsExperience}+ years | **Contact**: ${agent.phone} | ${agent.email}
 - **Service Areas**: ${agent.serviceAreas.join(", ")}
 - **Specialties**: ${agent.specialties.join(", ")}
 - **Languages**: ${agent.languages.join(", ")}
-- **Contact**: ${agent.phone} | ${agent.email}
 - **Awards**: ${agent.awards.join(", ")}
 
-## Recent Transactions (demonstrates market activity)
-${transactionsContext}
+## Recent Transactions
+${txCtx}
 
-## Available Neighborhoods Knowledge
-Known neighborhoods: ${Object.keys(agent.neighborhoodKnowledge).join(", ")}
-${relevantNeighborhoodContext}
+## Known Neighborhoods
+${Object.keys(agent.neighborhoodKnowledge).join(", ")}
+${neighborhoodCtx}
+
+## Tools
+You have access to tools:
+1. **search_properties** — Search real property listings. Use when visitors ask about specific properties or available homes.
+2. **extract_lead_info** — Extract lead qualification data. Call this PROACTIVELY whenever you learn the visitor's intent, budget, area preference, or timeline. You don't need to tell the visitor you're doing this.
 
 ## Response Guidelines
-1. **Be genuinely helpful** — provide real value, not just sales pitches
-2. **Use neighborhood data** when the visitor asks about specific areas — cite median prices, characteristics, and lifestyle
-3. **For pricing questions** — share general market data and trends, note that exact pricing needs a personalized CMA (Comparative Market Analysis)
-4. **For showings/specific properties** — warmly encourage sharing contact info so ${agent.name} can arrange it personally
-5. **Keep responses concise** — 2-3 short paragraphs max, use bullet points for comparisons
-6. **Lead qualification** — note what the visitor seems interested in (buyer vs seller, budget range, timeline, area preferences)
-7. **Never fabricate** specific active listings, prices, or statistics you weren't given
-8. **Match the visitor's language** — respond in whatever language they use
-9. **Be warm and professional** — conversational but not pushy
-10. **When uncertain** — be honest and offer to connect them with ${agent.name} directly`;
+1. Be genuinely helpful — provide real value, not just sales pitches
+2. Use neighborhood data when visitors ask about specific areas
+3. For pricing: share general market data, note exact pricing needs a CMA
+4. Call **extract_lead_info** whenever you learn new visitor preferences (silently)
+5. Call **search_properties** when they ask for listings
+6. Keep responses concise: 2-3 short paragraphs, use bullet points
+7. Naturally encourage sharing contact info after 2-3 exchanges
+8. Never fabricate listings or statistics you weren't given
+9. Be warm and professional — conversational but not pushy
+10. When uncertain, offer to connect them with ${agent.name} directly
+${langInstructions}`;
 }
 
+// ─── Usage Tracking Helpers ─────────────────────────────────────
+
+function getCurrentMonth(): string {
+  return new Date().toISOString().slice(0, 7); // "2026-03"
+}
+
+async function incrementUsage(agentSlug: string, field: "conversationCount" | "leadCount"): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+
+  const month = getCurrentMonth();
+  try {
+    // Upsert: increment or create
+    const existing = await db
+      .select()
+      .from(agentUsage)
+      .where(and(eq(agentUsage.agentSlug, agentSlug), eq(agentUsage.month, month)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      await db
+        .update(agentUsage)
+        .set({ [field]: sql`${agentUsage[field]} + 1` })
+        .where(and(eq(agentUsage.agentSlug, agentSlug), eq(agentUsage.month, month)));
+      return (existing[0][field] || 0) + 1;
+    } else {
+      await db.insert(agentUsage).values({
+        agentSlug,
+        month,
+        [field]: 1,
+      });
+      return 1;
+    }
+  } catch (e) {
+    console.warn("[Usage] Failed to track usage:", e);
+    return 0;
+  }
+}
+
+async function getMonthlyConversations(agentSlug: string): Promise<number> {
+  const db = await getDb();
+  if (!db) return 0;
+
+  try {
+    const rows = await db
+      .select()
+      .from(agentUsage)
+      .where(and(eq(agentUsage.agentSlug, agentSlug), eq(agentUsage.month, getCurrentMonth())))
+      .limit(1);
+    return rows[0]?.conversationCount || 0;
+  } catch {
+    return 0;
+  }
+}
+
+// ─── Lead Scoring ───────────────────────────────────────────────
+
+type LeadExtraction = {
+  intent?: string;
+  budget?: string;
+  area?: string;
+  timeline?: string;
+  urgency?: string;
+};
+
+function scoreLeadFromExtraction(ext: LeadExtraction): "hot" | "warm" | "cold" {
+  let score = 0;
+  if (ext.intent && ext.intent !== "browsing") score++;
+  if (ext.budget) score++;
+  if (ext.area) score++;
+  if (ext.timeline && !ext.timeline.toLowerCase().includes("just looking")) score++;
+  if (ext.urgency === "high") score += 2;
+  else if (ext.urgency === "medium") score++;
+
+  if (score >= 4) return "hot";
+  if (score >= 2) return "warm";
+  return "cold";
+}
+
+// ─── Stored lead extractions per session (in-memory cache) ──────
+const sessionLeadData = new Map<string, LeadExtraction>();
+
+// ═════════════════════════════════════════════════════════════════
+// Chat Router
+// ═════════════════════════════════════════════════════════════════
+
 export const chatRouter = router({
-  /**
-   * Send a message in a chat session.
-   * Creates a new session if no sessionId is provided.
-   * Uses RAG-style context injection for better responses.
-   */
   sendMessage: publicProcedure
     .input(
       z.object({
@@ -138,26 +303,50 @@ export const chatRouter = router({
     .mutation(async ({ input }) => {
       const db = await getDb();
       let currentSessionId = input.sessionId;
+      let isNewSession = false;
 
-      // Create new session if needed
+      // ── Free tier check ──────────────────────────────────
+      if (!currentSessionId) {
+        const monthlyCount = await getMonthlyConversations(input.agentSlug);
+        if (monthlyCount >= FREE_TIER_MONTHLY_LIMIT) {
+          return {
+            sessionId: "",
+            response: "This agent's AI assistant has reached the free tier limit for this month. Please contact the agent directly or try again next month.",
+            messageCount: 0,
+            leadScore: null,
+          };
+        }
+      }
+
+      // ── Session creation ─────────────────────────────────
       if (!currentSessionId) {
         currentSessionId = nanoid(16);
+        isNewSession = true;
+
+        // Detect language from first message
+        const detectedLang = detectLanguage(input.message);
+
         if (db) {
           try {
             await db.insert(chatSessions).values({
               sessionId: currentSessionId,
               agentSlug: input.agentSlug,
+              detectedLanguage: detectedLang,
             });
           } catch (e) {
             console.warn("[Chat] Failed to create session in DB:", e);
           }
         }
+
+        // Track usage for new conversation
+        await incrementUsage(input.agentSlug, "conversationCount");
       }
 
-      // Get conversation history from DB (or start fresh)
+      // ── Load conversation history ────────────────────────
       let conversationHistory: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
+      let sessionLanguage: "en" | "zh" = detectLanguage(input.message);
 
-      if (db) {
+      if (db && !isNewSession) {
         try {
           const existingMessages = await db
             .select()
@@ -169,26 +358,48 @@ export const chatRouter = router({
             role: m.role,
             content: m.content,
           }));
+
+          // Get stored language from session
+          const session = await db
+            .select()
+            .from(chatSessions)
+            .where(eq(chatSessions.sessionId, currentSessionId))
+            .limit(1);
+          if (session[0]?.detectedLanguage) {
+            sessionLanguage = session[0].detectedLanguage as "en" | "zh";
+          }
         } catch (e) {
           console.warn("[Chat] Failed to load history:", e);
         }
       }
 
-      // Build system prompt with RAG context from user's current message
-      const systemPrompt = buildAgentSystemPrompt(input.agentSlug, input.message);
+      // Re-detect language if user switches
+      const currentLang = detectLanguage(input.message);
+      if (currentLang !== sessionLanguage) {
+        sessionLanguage = currentLang;
+        if (db) {
+          try {
+            await db
+              .update(chatSessions)
+              .set({ detectedLanguage: sessionLanguage })
+              .where(eq(chatSessions.sessionId, currentSessionId));
+          } catch {}
+        }
+      }
 
-      // Keep conversation history trimmed to last 20 messages for context window efficiency
+      // ── Build messages with tools ────────────────────────
+      const systemPrompt = buildAgentSystemPrompt(input.agentSlug, input.message, sessionLanguage);
       const recentHistory = conversationHistory
         .filter((m) => m.role !== "system")
-        .slice(-20);
+        .slice(-MAX_HISTORY_MESSAGES);
 
-      const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+      const messages: Message[] = [
         { role: "system", content: systemPrompt },
         ...recentHistory,
         { role: "user", content: input.message },
       ];
 
-      // Save user message to DB
+      // Save user message
       if (db) {
         try {
           await db.insert(chatMessages).values({
@@ -201,56 +412,115 @@ export const chatRouter = router({
         }
       }
 
-      // Call LLM with optimized settings
+      // ── Call LLM with tools ──────────────────────────────
       const agent = AGENT_PROFILES[input.agentSlug] || AGENT_PROFILES.jane;
+      let aiResponse = "";
+      let leadExtraction: LeadExtraction | null = null;
+
       try {
         const result = await invokeLLM({
           messages,
-          maxTokens: 1024, // Keep responses concise
+          tools: [PROPERTY_SEARCH_TOOL, EXTRACT_LEAD_TOOL],
+          toolChoice: "auto",
+          maxTokens: 2048,
         });
-        const aiResponse =
-          typeof result.choices[0]?.message?.content === "string"
-            ? result.choices[0].message.content
-            : Array.isArray(result.choices[0]?.message?.content)
-              ? result.choices[0].message.content
-                  .filter((c): c is { type: "text"; text: string } => typeof c === "object" && "type" in c && c.type === "text")
-                  .map((c) => c.text)
-                  .join("")
-              : "I apologize, I'm having trouble responding right now. Please try again.";
 
-        // Save assistant response to DB
-        if (db) {
-          try {
-            await db.insert(chatMessages).values({
-              sessionId: currentSessionId,
-              role: "assistant",
-              content: aiResponse,
-            });
-          } catch (e) {
-            console.warn("[Chat] Failed to save assistant message:", e);
+        const choice = result.choices[0];
+        const toolCalls = choice?.message?.tool_calls;
+
+        // Handle tool calls
+        if (toolCalls && toolCalls.length > 0) {
+          const toolMessages: Message[] = [...messages, {
+            role: "assistant" as const,
+            content: choice.message.content || "",
+            tool_calls: toolCalls,
+          } as any];
+
+          for (const tc of toolCalls) {
+            try {
+              const args = JSON.parse(tc.function.arguments || "{}");
+
+              if (tc.function.name === "search_properties") {
+                const listings = await searchProperties(args as PropertySearchParams);
+                const formatted = formatListingsForAI(listings);
+                toolMessages.push({
+                  role: "tool",
+                  content: formatted || "No properties found matching those criteria. The property search service may be temporarily unavailable.",
+                  tool_call_id: tc.id,
+                });
+              }
+
+              if (tc.function.name === "extract_lead_info") {
+                leadExtraction = args as LeadExtraction;
+                // Merge with existing data
+                const existing = sessionLeadData.get(currentSessionId) || {};
+                const merged = { ...existing, ...leadExtraction };
+                sessionLeadData.set(currentSessionId, merged);
+                leadExtraction = merged;
+
+                toolMessages.push({
+                  role: "tool",
+                  content: "Lead information recorded successfully. Continue the conversation naturally.",
+                  tool_call_id: tc.id,
+                });
+              }
+            } catch (toolError) {
+              console.warn(`[Chat] Tool ${tc.function.name} failed:`, toolError);
+              toolMessages.push({
+                role: "tool",
+                content: "Tool execution failed. Continue the conversation without this data.",
+                tool_call_id: tc.id,
+              });
+            }
           }
-        }
 
-        return {
-          sessionId: currentSessionId,
-          response: aiResponse,
-          messageCount: messages.length - 1, // exclude system prompt
-        };
+          // Second LLM call with tool results
+          const followUp = await invokeLLM({
+            messages: toolMessages,
+            maxTokens: 1024,
+          });
+          aiResponse = extractTextContent(followUp.choices[0]?.message?.content);
+        } else {
+          aiResponse = extractTextContent(choice?.message?.content);
+        }
       } catch (error) {
         console.error("[Chat] LLM invocation failed:", error);
-        const fallbackResponse = `I apologize, I'm experiencing some technical difficulties. Please try again in a moment, or contact ${agent.name} directly at ${agent.email} or ${agent.phone}.`;
-
-        return {
-          sessionId: currentSessionId,
-          response: fallbackResponse,
-          messageCount: messages.length - 1,
-        };
+        aiResponse = sessionLanguage === "zh"
+          ? `抱歉，我暂时遇到了技术问题。请稍后重试，或直接联系 ${agent.name}：${agent.email} 或 ${agent.phone}。`
+          : `I apologize, I'm experiencing technical difficulties. Please try again, or contact ${agent.name} directly at ${agent.email} or ${agent.phone}.`;
       }
+
+      // ── Save AI response ─────────────────────────────────
+      if (db) {
+        try {
+          await db.insert(chatMessages).values({
+            sessionId: currentSessionId,
+            role: "assistant",
+            content: aiResponse,
+          });
+        } catch (e) {
+          console.warn("[Chat] Failed to save assistant message:", e);
+        }
+      }
+
+      // ── Hot lead notification ─────────────────────────────
+      const currentScore = leadExtraction ? scoreLeadFromExtraction(leadExtraction) : null;
+      if (currentScore === "hot") {
+        // Fire-and-forget push notification
+        notifyOwner({
+          title: `🔥 Hot Lead on ${agent.name}'s page`,
+          content: `A visitor is actively looking ${leadExtraction?.area ? `in ${leadExtraction.area}` : ""} ${leadExtraction?.budget ? `with budget ${leadExtraction.budget}` : ""}. Timeline: ${leadExtraction?.timeline || "not specified"}.`,
+        }).catch(() => {});
+      }
+
+      return {
+        sessionId: currentSessionId,
+        response: aiResponse,
+        messageCount: messages.length - 1,
+        leadScore: currentScore,
+      };
     }),
 
-  /**
-   * Get chat history for a session
-   */
   getHistory: publicProcedure
     .input(z.object({ sessionId: z.string() }))
     .query(async ({ input }) => {
@@ -267,10 +537,7 @@ export const chatRouter = router({
         return {
           messages: messages
             .filter((m) => m.role !== "system")
-            .map((m) => ({
-              role: m.role,
-              content: m.content,
-            })),
+            .map((m) => ({ role: m.role, content: m.content })),
         };
       } catch (e) {
         console.warn("[Chat] Failed to get history:", e);
@@ -279,11 +546,11 @@ export const chatRouter = router({
     }),
 });
 
+// ═════════════════════════════════════════════════════════════════
+// Lead Router
+// ═════════════════════════════════════════════════════════════════
+
 export const leadRouter = router({
-  /**
-   * Capture a lead from a chat conversation.
-   * Generates AI summary of the conversation and notifies the agent.
-   */
   capture: publicProcedure
     .input(
       z.object({
@@ -311,22 +578,27 @@ export const leadRouter = router({
             .filter((m) => m.role !== "system")
             .map((m) => ({ role: m.role, content: m.content }));
         } catch (e) {
-          console.warn("[Lead] Failed to load conversation for summary:", e);
+          console.warn("[Lead] Failed to load conversation:", e);
         }
       }
 
-      // Generate AI conversation summary with structured output prompt
+      // Get extracted lead signals from session cache
+      const extraction = sessionLeadData.get(input.sessionId) || {};
+      const leadScore = scoreLeadFromExtraction(extraction);
+
+      // Generate AI summary with structured format
       let conversationSummary = "No conversation history available.";
       if (conversationHistory.length > 0) {
         try {
-          const summaryPrompt = `Analyze this real estate chat conversation and produce a brief CRM lead summary.
+          const summaryPrompt = `Analyze this real estate chat conversation and produce a CRM lead summary.
 
 FORMAT:
 - **Intent**: [buying/selling/renting/investing/general inquiry]
 - **Area of Interest**: [neighborhoods or cities mentioned]
 - **Budget Range**: [if mentioned, otherwise "Not specified"]
 - **Timeline**: [if mentioned, otherwise "Not specified"]
-- **Key Notes**: [1-2 sentences summarizing what they're looking for]
+- **Lead Score**: ${leadScore.toUpperCase()}
+- **Key Notes**: [2-3 sentences summarizing what they're looking for]
 
 Conversation:
 ${conversationHistory.map((m) => `${m.role === "user" ? "Visitor" : "AI"}: ${m.content}`).join("\n")}`;
@@ -345,7 +617,6 @@ ${conversationHistory.map((m) => `${m.role === "user" ? "Visitor" : "AI"}: ${m.c
           }
         } catch (e) {
           console.warn("[Lead] Failed to generate AI summary:", e);
-          // Fallback: manual summary from conversation
           conversationSummary = conversationHistory
             .filter((m) => m.role === "user")
             .map((m) => m.content)
@@ -354,7 +625,7 @@ ${conversationHistory.map((m) => `${m.role === "user" ? "Visitor" : "AI"}: ${m.c
         }
       }
 
-      // Save lead to DB
+      // Save lead to DB with extracted data
       if (db) {
         try {
           await db.insert(leads).values({
@@ -365,6 +636,11 @@ ${conversationHistory.map((m) => `${m.role === "user" ? "Visitor" : "AI"}: ${m.c
             source: "ai_chat",
             sessionId: input.sessionId,
             conversationSummary,
+            leadScore,
+            extractedBudget: extraction.budget || null,
+            extractedArea: extraction.area || null,
+            extractedTimeline: extraction.timeline || null,
+            extractedIntent: extraction.intent || null,
           });
 
           // Update chat session status
@@ -377,14 +653,29 @@ ${conversationHistory.map((m) => `${m.role === "user" ? "Visitor" : "AI"}: ${m.c
             })
             .where(eq(chatSessions.sessionId, input.sessionId));
 
-          console.log(`[Lead] New lead captured: ${input.name} (${input.email})`);
+          // Track lead count
+          await incrementUsage(input.agentSlug, "leadCount");
+
+          console.log(`[Lead] ${leadScore.toUpperCase()} lead captured: ${input.name} (${input.email})`);
         } catch (e) {
           console.warn("[Lead] Failed to save lead to DB:", e);
         }
       }
 
-      // Send notification email to agent
+      // Clean up session cache
+      sessionLeadData.delete(input.sessionId);
+
+      // Push notification + email
       try {
+        const scoreEmoji = leadScore === "hot" ? "🔥" : leadScore === "warm" ? "🌟" : "📋";
+
+        // Push notification
+        notifyOwner({
+          title: `${scoreEmoji} New ${leadScore.toUpperCase()} Lead: ${input.name}`,
+          content: `${input.email}${extraction.area ? ` | Area: ${extraction.area}` : ""}${extraction.budget ? ` | Budget: ${extraction.budget}` : ""}`,
+        }).catch(() => {});
+
+        // Email notification
         const notificationHtml = generateLeadNotificationEmail(
           input.name,
           input.email,
@@ -392,19 +683,32 @@ ${conversationHistory.map((m) => `${m.role === "user" ? "Visitor" : "AI"}: ${m.c
           conversationSummary,
           agent.name
         );
-
         await sendEmail({
           to: agent.email,
-          subject: `🎯 New AI Chat Lead: ${input.name}`,
+          subject: `${scoreEmoji} New ${leadScore.toUpperCase()} AI Chat Lead: ${input.name}`,
           html: notificationHtml,
         });
       } catch (e) {
-        console.warn("[Lead] Failed to send notification email:", e);
+        console.warn("[Lead] Failed to send notifications:", e);
       }
 
       return {
         success: true,
         message: "Thank you! Your information has been sent to the agent.",
+        leadScore,
       };
     }),
 });
+
+// ─── Helpers ────────────────────────────────────────────────────
+
+function extractTextContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((c): c is { type: "text"; text: string } => typeof c === "object" && c !== null && "type" in c && c.type === "text")
+      .map((c) => c.text)
+      .join("");
+  }
+  return "I apologize, I'm having trouble responding right now. Please try again.";
+}
