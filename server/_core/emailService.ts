@@ -127,6 +127,42 @@ export function generateConfirmationEmail(
 }
 
 /**
+ * Generate HTML email for new AI chat lead notification
+ */
+export function generateLeadNotificationEmail(
+  visitorName: string,
+  visitorEmail: string,
+  visitorPhone: string | null,
+  conversationSummary: string,
+  targetMemberName: string
+): string {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <div style="background: linear-gradient(135deg, #d4af37, #c9a227); padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+        <h2 style="color: #fff; margin: 0 0 10px 0;">🎯 New AI Chat Lead</h2>
+        <p style="color: #fff; margin: 0; opacity: 0.9;">A website visitor engaged with your AI assistant and shared their contact info.</p>
+      </div>
+
+      <div style="background-color: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+        <h3 style="color: #333; margin-top: 0;">Lead Information</h3>
+        <p style="margin: 8px 0;"><strong>Name:</strong> ${escapeHtml(visitorName)}</p>
+        <p style="margin: 8px 0;"><strong>Email:</strong> <a href="mailto:${escapeHtml(visitorEmail)}">${escapeHtml(visitorEmail)}</a></p>
+        ${visitorPhone ? `<p style="margin: 8px 0;"><strong>Phone:</strong> ${escapeHtml(visitorPhone)}</p>` : ""}
+
+        <h3 style="color: #333; margin-top: 20px;">AI Conversation Summary</h3>
+        <div style="background-color: #f9f9f9; padding: 12px; border-left: 4px solid #d4af37; margin: 10px 0;">
+          <p style="margin: 0; white-space: pre-wrap; color: #555;">${escapeHtml(conversationSummary)}</p>
+        </div>
+      </div>
+
+      <div style="background-color: #f0f0f0; padding: 15px; border-radius: 8px; text-align: center; color: #666; font-size: 12px;">
+        <p style="margin: 0;">This lead was captured by Kevv AI for ${escapeHtml(targetMemberName)} | Homix Realty Inc.</p>
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Escape HTML special characters to prevent injection
  */
 function escapeHtml(text: string): string {

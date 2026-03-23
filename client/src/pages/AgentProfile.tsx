@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Facebook, Instagram, Linkedin, Mail, MapPin, Phone, Twitter, Youtube } from "lucide-react";
 import { useEffect, useState } from "react";
 import ContactForm from "@/components/ContactForm";
+import FloatingChat from "@/components/FloatingChat";
 
 export default function AgentProfile() {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -20,6 +21,80 @@ export default function AgentProfile() {
 
     window.addEventListener("scroll", handleScroll);
     return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  // SEO: Set page title and meta description
+  useEffect(() => {
+    document.title = "Heidi Liu | Licensed Real Estate Broker | Homix Realty – Queens, Long Island NY";
+    
+    const setMeta = (name: string, content: string) => {
+      let el = document.querySelector(`meta[name='${name}']`) as HTMLMetaElement;
+      if (!el) {
+        el = document.createElement("meta");
+        el.name = name;
+        document.head.appendChild(el);
+      }
+      el.content = content;
+    };
+
+    const setOgMeta = (property: string, content: string) => {
+      let el = document.querySelector(`meta[property='${property}']`) as HTMLMetaElement;
+      if (!el) {
+        el = document.createElement("meta");
+        el.setAttribute("property", property);
+        document.head.appendChild(el);
+      }
+      el.content = content;
+    };
+
+    setMeta("description", "Heidi Liu is a licensed real estate associate broker at Homix Realty Inc serving Queens, Flushing, Astoria, and Long Island NY. 13+ years experience, 5-star Zillow rated. Contact for a free consultation.");
+    setMeta("keywords", "real estate, broker, Queens NY, Flushing, Astoria, Long Island, home buying, home selling, Heidi Liu, Homix Realty");
+    setOgMeta("og:title", "Heidi Liu | Licensed Real Estate Broker | Homix Realty");
+    setOgMeta("og:description", "13+ years of real estate expertise in Queens & Long Island. Platinum Award winner. Chat with AI assistant for instant answers.");
+    setOgMeta("og:type", "profile");
+
+    // JSON-LD Structured Data
+    const jsonLd = {
+      "@context": "https://schema.org",
+      "@type": "RealEstateAgent",
+      "name": "Heidi Liu",
+      "jobTitle": "Licensed Real Estate Associate Broker",
+      "worksFor": {
+        "@type": "RealEstateAgent",
+        "name": "Homix Realty Inc",
+      },
+      "address": {
+        "@type": "PostalAddress",
+        "streetAddress": "3720 Prince St Ste 3H",
+        "addressLocality": "Flushing",
+        "addressRegion": "NY",
+        "postalCode": "11354",
+        "addressCountry": "US",
+      },
+      "telephone": "+1-516-988-8668",
+      "email": "heidi@homixny.com",
+      "areaServed": ["Queens", "Flushing", "Astoria", "Great Neck", "Long Island", "Jericho"],
+      "knowsLanguage": ["English", "Chinese"],
+      "aggregateRating": {
+        "@type": "AggregateRating",
+        "ratingValue": "5.0",
+        "reviewCount": "20",
+        "bestRating": "5",
+      },
+    };
+
+    let scriptEl = document.querySelector('#agent-jsonld') as HTMLScriptElement;
+    if (!scriptEl) {
+      scriptEl = document.createElement("script");
+      scriptEl.id = "agent-jsonld";
+      scriptEl.type = "application/ld+json";
+      document.head.appendChild(scriptEl);
+    }
+    scriptEl.textContent = JSON.stringify(jsonLd);
+
+    return () => {
+      scriptEl?.remove();
+    };
   }, []);
 
   return (
@@ -315,6 +390,9 @@ export default function AgentProfile() {
 
         </main>
       </div>
+
+      {/* AI Chat Widget */}
+      <FloatingChat agentSlug="heidi" agentName="Heidi" />
     </div>
   );
 }
